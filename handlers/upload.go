@@ -2,12 +2,15 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -118,6 +121,95 @@ func UploadStatus(c *gin.Context) {
 		resp["can_merge"] = len(uploaded) == total
 	}
 	ok(c, resp)
+}
+
+// MergeChunks 把已上传的分片合并成完整文件。
+//
+// 由前端在确认所有分片都返回成功后主动调用一次，而不是后端在收齐分片时自动触发。
+// 后端自动触发的写法在并发下会翻车：最后几片几乎同时到达，
+// 多个请求各自发现「分片数刚好够了」，于是同时发起合并，
+// 对象存储侧会报状态机冲突。
+//
+// 由前端统一触发，合并请求天然只有一个；后端的合并锁再兜一层，
+// 防止前端因超时重试而重复调用。
+func MergeChunks(c *gin.Context) {
+	var req struct {
+		MD5   string `json:"md5" binding:"required"`
+		Total int    `json:"total" binding:"required"`
+		Ext   string `json:"ext"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "参数错误")
+		return
+	}
+
+	fileMD5 := strings.ToLower(strings.TrimSpace(req.MD5))
+	if !isMD5(fileMD5) {
+		fail(c, http.StatusBadRequest, "md5 格式错误")
+		return
+	}
+	// 一万片是对象存储合并接口的上限。
+	if req.Total <= 0 || req.Total > 10000 {
+		fail(c, http.StatusBadRequest, "total 超出范围")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// 先校验分片数量，避免为一个传了一半的任务去抢锁。
+	count, err := services.UploadedCount(ctx, fileMD5)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "查询分片状态失败")
+		return
+	}
+	if count != int64(req.Total) {
+		fail(c, http.StatusBadRequest, "分片未传齐")
+		return
+	}
+
+	locked, err := services.TryLockMerge(ctx, fileMD5, 30*time.Second)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "获取合并锁失败")
+		return
+	}
+	if !locked {
+		// 409 而不是 500：另一个请求正在合并，前端稍后重试即可。
+		fail(c, http.StatusConflict, "该文件正在合并中")
+		return
+	}
+	defer services.UnlockMerge(context.WithoutCancel(ctx), fileMD5)
+
+	destKey := "videos/" + fileMD5 + normalizeExt(req.Ext)
+
+	if err := services.ComposeChunks(ctx, fileMD5, req.Total, destKey); err != nil {
+		fail(c, http.StatusInternalServerError, "合并分片失败")
+		return
+	}
+
+	// 合并成功后清掉分片记录，避免 24 小时内重复上传被判为「已存在」。
+	if err := services.ClearChunks(ctx, fileMD5); err != nil {
+		// 清理失败不影响本次结果的正确性，记录即可。
+		log.Printf("清除分片状态失败 md5=%s: %v", fileMD5, err)
+	}
+
+	ok(c, gin.H{"md5": fileMD5, "object": destKey})
+}
+
+// normalizeExt 规范化扩展名，只保留白名单内的值。
+// 直接拼用户传入的扩展名会带来路径穿越与类型伪造问题。
+func normalizeExt(ext string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.TrimPrefix(ext, "."))) {
+	case "mp4":
+		return ".mp4"
+	case "mov":
+		return ".mov"
+	case "m4a":
+		return ".m4a"
+	case "mp3":
+		return ".mp3"
+	default:
+		return ".mp4"
+	}
 }
 
 // isMD5 校验是否为 32 位十六进制字符串。

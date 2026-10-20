@@ -68,3 +68,18 @@ func UploadedCount(ctx context.Context, md5 string) (int64, error) {
 func ClearChunks(ctx context.Context, md5 string) error {
 	return rdb.Del(ctx, chunkKey(md5)).Err()
 }
+
+// 合并锁的 key 前缀。
+// 前端在超时后会重试合并请求，没有锁的话两次合并并发执行，
+// 对象存储侧会因为目标对象被同时写入而报状态机冲突。
+const mergeLockPrefix = "lock:merge:"
+
+// TryLockMerge 尝试获取合并锁，返回是否拿到。
+func TryLockMerge(ctx context.Context, md5 string, ttl time.Duration) (bool, error) {
+	return rdb.SetNX(ctx, mergeLockPrefix+md5, 1, ttl).Result()
+}
+
+// UnlockMerge 释放合并锁。
+func UnlockMerge(ctx context.Context, md5 string) error {
+	return rdb.Del(ctx, mergeLockPrefix+md5).Err()
+}

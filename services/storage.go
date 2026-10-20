@@ -70,3 +70,27 @@ func ObjectExists(ctx context.Context, key string) (bool, error) {
 	}
 	return true, nil
 }
+
+// ComposeChunks 把已上传的分片按序号拼接成一个完整对象。
+//
+// 对象存储的合并是元数据层面的拼接，不做内容拷贝，所以很快。
+// 但它有两条硬性约束：除最后一片外每片不能小于 5MB，总分片数不超过一万。
+// 前端切片大小必须满足第一条，否则这里会直接返回错误。
+func ComposeChunks(ctx context.Context, md5 string, total int, destKey string) error {
+	srcs := make([]minio.CopySrcOptions, 0, total)
+	for i := 0; i < total; i++ {
+		srcs = append(srcs, minio.CopySrcOptions{
+			Bucket: storageBucket,
+			Object: ChunkKey(md5, i),
+		})
+	}
+
+	_, err := storageClient.ComposeObject(ctx, minio.CopyDestOptions{
+		Bucket: storageBucket,
+		Object: destKey,
+	}, srcs...)
+	if err != nil {
+		return fmt.Errorf("合并分片: %w", err)
+	}
+	return nil
+}
