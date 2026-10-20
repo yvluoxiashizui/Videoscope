@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
@@ -26,6 +27,19 @@ func main() {
 		log.Fatal("建表失败: ", err)
 	}
 	repos.SetDB(db)
+
+	rdb := redis.NewClient(&redis.Options{Addr: config.RedisAddr()})
+	services.SetRedis(rdb)
+
+	if err := services.InitStorage(
+		config.S3Endpoint(),
+		config.S3AccessKey(),
+		config.S3SecretKey(),
+		config.S3Bucket(),
+		config.S3UseSSL(),
+	); err != nil {
+		log.Fatal("初始化对象存储失败: ", err)
+	}
 
 	r := gin.Default()
 

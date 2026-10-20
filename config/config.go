@@ -31,6 +31,30 @@ func RedisAddr() string {
 	return Getenv("VIDEOSCOPE_REDIS_ADDR", "127.0.0.1:6379")
 }
 
+// S3Endpoint 返回对象存储服务地址，不带协议前缀。
+func S3Endpoint() string {
+	return Getenv("VIDEOSCOPE_S3_ENDPOINT", "127.0.0.1:9000")
+}
+
+// S3AccessKey 与 S3SecretKey 是对象存储的访问凭证。
+func S3AccessKey() string {
+	return Getenv("VIDEOSCOPE_S3_ACCESS_KEY", "minioadmin")
+}
+
+func S3SecretKey() string {
+	return Getenv("VIDEOSCOPE_S3_SECRET_KEY", "minioadmin")
+}
+
+// S3Bucket 是存放分片与成品的桶。
+func S3Bucket() string {
+	return Getenv("VIDEOSCOPE_S3_BUCKET", "videos")
+}
+
+// S3UseSSL 决定是否用 HTTPS 连接对象存储，本地开发关闭。
+func S3UseSSL() bool {
+	return Getenv("VIDEOSCOPE_S3_USE_SSL", "false") == "true"
+}
+
 // ListenAddr 返回服务监听地址。
 func ListenAddr() string {
 	return Getenv("VIDEOSCOPE_LISTEN", ":8080")
