@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -9,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -78,30 +78,50 @@ func UploadChunk(c *gin.Context) {
 	}
 	defer src.Close()
 
-	data, err := io.ReadAll(io.LimitReader(src, maxChunkSize+1))
+	// 先落到临时文件，边写边算摘要，内存占用与分片大小无关。
+	// 直接把分片读进内存的话，并发上传时峰值内存等于单片上限乘以并发数。
+	tmp, err := os.CreateTemp("", "chunk-*.part")
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "创建临时文件失败")
+		return
+	}
+	defer func() {
+		tmp.Close()
+		os.Remove(tmp.Name())
+	}()
+
+	sum := md5.New()
+	written, err := io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(src, maxChunkSize+1))
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "读取分片失败")
 		return
 	}
-	if len(data) > maxChunkSize {
+	if written > maxChunkSize {
 		fail(c, http.StatusRequestEntityTooLarge, "分片超过大小上限")
 		return
 	}
 
 	if want := strings.ToLower(strings.TrimSpace(c.PostForm("chunk_md5"))); want != "" {
-		sum := md5.Sum(data)
-		if hex.EncodeToString(sum[:]) != want {
+		if hex.EncodeToString(sum.Sum(nil)) != want {
 			// 返回 400 而不是 500：这是客户端数据问题，前端拿到后应重传该分片。
 			fail(c, http.StatusBadRequest, "分片校验失败，请重传")
 			return
 		}
 	}
 
+	// 校验通过后回到文件头，把整片交给对象存储。
+	// 走临时文件而不是内存的直接代价是多一次磁盘往返，
+	// 换来的是内存占用恒定，不会随并发数线性增长。
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		fail(c, http.StatusInternalServerError, "读取临时文件失败")
+		return
+	}
+
 	ctx := c.Request.Context()
 	key := services.ChunkKey(fileMD5, index)
 
 	// 先落盘，后记账。顺序反了会产生「已记录但对象不存在」的假上传。
-	if err := services.PutChunk(ctx, key, bytes.NewReader(data), int64(len(data)), "application/octet-stream"); err != nil {
+	if err := services.PutChunk(ctx, key, tmp, written, "application/octet-stream"); err != nil {
 		fail(c, http.StatusInternalServerError, "写入分片失败")
 		return
 	}
@@ -110,7 +130,7 @@ func UploadChunk(c *gin.Context) {
 		return
 	}
 
-	ok(c, gin.H{"index": index, "size": len(data)})
+	ok(c, gin.H{"index": index, "size": written})
 }
 
 // UploadStatus 返回某个文件已上传的分片序号，前端据此续传。
