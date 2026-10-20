@@ -71,6 +71,15 @@ func ObjectExists(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
+// ObjectSize 返回对象字节数。
+func ObjectSize(ctx context.Context, key string) (int64, error) {
+	info, err := storageClient.StatObject(ctx, storageBucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("查询对象 %s: %w", key, err)
+	}
+	return info.Size, nil
+}
+
 // ComposeChunks 把已上传的分片按序号拼接成一个完整对象。
 //
 // 对象存储的合并是元数据层面的拼接，不做内容拷贝，所以很快。

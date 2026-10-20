@@ -21,6 +21,9 @@ import (
 // 前端按 1MB / 5MB / 20MB 三档动态调整，取 32MB 留出余量。
 const maxChunkSize = 32 << 20
 
+// minChunkSize 是对象存储合并接口对非末片的下限要求，小于这个值会直接拒绝合并。
+const minChunkSize = 5 << 20
+
 // UploadChunk 接收单个分片。
 //
 // 请求为 multipart/form-data，字段：md5（整个文件）、index（分片序号）、
@@ -179,6 +182,21 @@ func MergeChunks(c *gin.Context) {
 	if count != int64(req.Total) {
 		fail(c, http.StatusBadRequest, "分片未传齐")
 		return
+	}
+
+	// 对象存储要求除最后一片外每片不小于 minChunkSize，否则合并接口直接拒绝。
+	// 只查第一片：前端切片是固定大小，第一片合规意味着其余相同。
+	// 不逐片检查是因为那样要对每个分片发一次请求，几百片时耗时不可接受。
+	if req.Total > 1 {
+		size, err := services.ObjectSize(ctx, services.ChunkKey(fileMD5, 0))
+		if err != nil {
+			fail(c, http.StatusInternalServerError, "查询分片信息失败")
+			return
+		}
+		if size < minChunkSize {
+			fail(c, http.StatusBadRequest, "分片过小，除最后一片外不得低于 5MB")
+			return
+		}
 	}
 
 	// 锁的存活时间要覆盖合并的最长耗时。
