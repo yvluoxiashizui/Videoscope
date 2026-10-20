@@ -92,6 +92,34 @@ func UploadChunk(c *gin.Context) {
 	ok(c, gin.H{"index": index, "size": len(data)})
 }
 
+// UploadStatus 返回某个文件已上传的分片序号，前端据此续传。
+//
+// 传入 total 时额外返回 can_merge：
+// 分片齐全说明可以直接合并，前端不需要再补传任何数据。
+func UploadStatus(c *gin.Context) {
+	fileMD5 := strings.ToLower(strings.TrimSpace(c.Query("md5")))
+	if !isMD5(fileMD5) {
+		fail(c, http.StatusBadRequest, "md5 格式错误")
+		return
+	}
+
+	uploaded, err := services.UploadedChunks(c.Request.Context(), fileMD5)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "查询上传状态失败")
+		return
+	}
+
+	resp := gin.H{
+		"md5":      fileMD5,
+		"uploaded": uploaded,
+		"count":    len(uploaded),
+	}
+	if total, err := parseInt(c.Query("total")); err == nil && total > 0 {
+		resp["can_merge"] = len(uploaded) == total
+	}
+	ok(c, resp)
+}
+
 // isMD5 校验是否为 32 位十六进制字符串。
 func isMD5(s string) bool {
 	if len(s) != 32 {

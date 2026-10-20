@@ -64,6 +64,7 @@ func main() {
 		})
 
 		auth.POST("/upload/chunk", handlers.UploadChunk)
+		auth.GET("/upload/status", handlers.UploadStatus)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
