@@ -155,8 +155,22 @@ func MergeChunks(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	destKey := "videos/" + fileMD5 + normalizeExt(req.Ext)
 
-	// 先校验分片数量，避免为一个传了一半的任务去抢锁。
+	// 幂等判断放在最前面。
+	// 合并成功后会清空 Redis 里的分片记录，如果前端因网络超时重试，
+	// 后面的分片数校验会发现「一片都没有」而返回「分片未传齐」，
+	// 用户看到的是一次失败，实际文件早已就绪。
+	// 先查成品是否存在，存在就直接返回成功。
+	if exists, err := services.ObjectExists(ctx, destKey); err != nil {
+		fail(c, http.StatusInternalServerError, "查询合并结果失败")
+		return
+	} else if exists {
+		ok(c, gin.H{"md5": fileMD5, "object": destKey, "reused": true})
+		return
+	}
+
+	// 再校验分片数量，避免为一个传了一半的任务去抢锁。
 	count, err := services.UploadedCount(ctx, fileMD5)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "查询分片状态失败")
@@ -181,8 +195,6 @@ func MergeChunks(c *gin.Context) {
 		return
 	}
 	defer services.UnlockMerge(context.WithoutCancel(ctx), fileMD5)
-
-	destKey := "videos/" + fileMD5 + normalizeExt(req.Ext)
 
 	if err := services.ComposeChunks(ctx, fileMD5, req.Total, destKey); err != nil {
 		fail(c, http.StatusInternalServerError, "合并分片失败")
