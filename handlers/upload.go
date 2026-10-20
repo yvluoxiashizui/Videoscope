@@ -46,6 +46,21 @@ func UploadChunk(c *gin.Context) {
 		return
 	}
 
+	// total 可选，传了就校验序号上界。
+	// 没有这条限制时，客户端可以传任意大的 index，
+	// 在没有对应业务数据的情况下往对象存储里造出大量孤立分片。
+	if totalStr := strings.TrimSpace(c.PostForm("total")); totalStr != "" {
+		total, err := parseInt(totalStr)
+		if err != nil || total <= 0 || total > 10000 {
+			fail(c, http.StatusBadRequest, "total 参数错误")
+			return
+		}
+		if index >= total {
+			fail(c, http.StatusBadRequest, "index 超出总分片数")
+			return
+		}
+	}
+
 	header, err := c.FormFile("file")
 	if err != nil {
 		fail(c, http.StatusBadRequest, "缺少分片文件")
