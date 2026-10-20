@@ -23,7 +23,12 @@ func main() {
 	}
 
 	// 表随对应阶段加入，AutoMigrate 只做增量的加表加列，不会删字段。
-	if err := db.AutoMigrate(&models.User{}, &models.VideoTask{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.VideoTask{},
+		&models.VideoTranscription{},
+		&models.AISummary{},
+	); err != nil {
 		log.Fatal("建表失败: ", err)
 	}
 	repos.SetDB(db)
