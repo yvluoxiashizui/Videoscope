@@ -12,6 +12,7 @@ import (
 	"videoscope/handlers"
 	"videoscope/models"
 	"videoscope/repos"
+	"videoscope/services"
 )
 
 func main() {
@@ -28,12 +29,26 @@ func main() {
 
 	r := gin.Default()
 
+	// 公开接口
 	r.POST("/api/register", handlers.Register)
 	r.POST("/api/login", handlers.Login)
 	r.GET("/api/user", handlers.GetUser)
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// 需要登录的接口
+	auth := r.Group("/api", handlers.Auth)
+	{
+		auth.GET("/me", func(c *gin.Context) {
+			u, err := services.GetUser(handlers.CurrentUserID(c))
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": u})
+		})
+	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
 		log.Fatal("启动失败: ", err)
