@@ -22,8 +22,8 @@ func main() {
 		log.Fatal("连接数据库失败: ", err)
 	}
 
-	// 阶段一只建 user 表，其余表随对应阶段加入。
-	if err := db.AutoMigrate(&models.User{}); err != nil {
+	// 表随对应阶段加入，AutoMigrate 只做增量的加表加列，不会删字段。
+	if err := db.AutoMigrate(&models.User{}, &models.VideoTask{}); err != nil {
 		log.Fatal("建表失败: ", err)
 	}
 	repos.SetDB(db)
