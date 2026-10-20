@@ -167,7 +167,10 @@ func MergeChunks(c *gin.Context) {
 		return
 	}
 
-	locked, err := services.TryLockMerge(ctx, fileMD5, 30*time.Second)
+	// 锁的存活时间要覆盖合并的最长耗时。
+	// 对象存储的合并虽然是元数据操作，但大文件（数百片）时服务端仍需逐片校验，
+	// 设得过短会导致锁在合并完成前失效，重试请求拿到锁后与本次并发执行。
+	locked, err := services.TryLockMerge(ctx, fileMD5, 5*time.Minute)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "获取合并锁失败")
 		return
