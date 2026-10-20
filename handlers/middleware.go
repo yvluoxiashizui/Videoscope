@@ -25,7 +25,12 @@ func Auth(c *gin.Context) {
 	}
 
 	// 同时兼容 "Bearer xxx" 与直接传 token 两种写法。
-	token := strings.TrimSpace(strings.TrimPrefix(raw, "Bearer "))
+	// 判断前缀时忽略大小写：RFC 7235 规定认证方案名不区分大小写，
+	// 部分客户端会用 "bearer"，用 TrimPrefix 精确匹配会导致取不到 token。
+	token := strings.TrimSpace(raw)
+	if parts := strings.Fields(raw); len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		token = parts[1]
+	}
 
 	userID, err := services.Parse(token)
 	if err != nil {
