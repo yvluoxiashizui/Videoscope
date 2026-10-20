@@ -43,6 +43,10 @@ func main() {
 
 	r := gin.Default()
 
+	// 单次请求体上限。分片是 multipart 上传，内存阈值设成单片上限的两倍，
+	// 保证正常分片直接在内存里解析，不落到系统临时目录多做一次磁盘往返。
+	r.MaxMultipartMemory = 64 << 20
+
 	// 公开接口
 	r.POST("/api/register", handlers.Register)
 	r.POST("/api/login", handlers.Login)
