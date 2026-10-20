@@ -62,6 +62,8 @@ func main() {
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": u})
 		})
+
+		auth.POST("/upload/chunk", handlers.UploadChunk)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
