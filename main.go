@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"videoscope/config"
+	"videoscope/handlers"
 	"videoscope/models"
 	"videoscope/repos"
 )
@@ -26,6 +27,10 @@ func main() {
 	repos.SetDB(db)
 
 	r := gin.Default()
+
+	r.POST("/api/register", handlers.Register)
+	r.POST("/api/login", handlers.Login)
+	r.GET("/api/user", handlers.GetUser)
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
