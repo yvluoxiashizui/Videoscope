@@ -65,6 +65,7 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 	// 偏移量按分段序号推算：除最后一段外，每段的实际长度都等于 SegmentSeconds，
 	// 所以第 i 段的起点就是 i * SegmentSeconds。
 	// 过短的尾段已经在切分阶段被过滤，不会打乱这个规律。
+	transcripts := make([]TranscriptSegment, 0)
 	texts := make([]string, 0)
 	for i, seg := range segments {
 		offset := float64(i) * SegmentSeconds
@@ -76,6 +77,7 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		}
 		for _, s := range segs {
 			if text := strings.TrimSpace(s.Text); text != "" {
+				transcripts = append(transcripts, s)
 				texts = append(texts, text)
 			}
 		}
@@ -86,7 +88,32 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		return fmt.Errorf("转写结果为空")
 	}
 
-	// 5. 落库。task_id 上有唯一索引，重试会覆盖上一次的结果。
+	// 5. 抽关键帧并识别画面文字。
+	//
+	// 单帧识别失败不中断整个任务：黑屏、纯色画面本来就抽不出文字，
+	// 这不是异常。只有所有帧都失败才值得警惕，用日志暴露出来。
+	frames, err := ExtractKeyframes(ctx, videoPath, dir, KeyframeInterval)
+	if err != nil {
+		return fmt.Errorf("抽取关键帧: %w", err)
+	}
+
+	visuals := make([]FrameText, 0, len(frames))
+	for _, f := range frames {
+		text, ocrErr := OCR().Extract(ctx, f.Path)
+		if ocrErr != nil {
+			log.Printf("关键帧识别失败 task=%d frame=%s: %v", task.ID, filepath.Base(f.Path), ocrErr)
+			continue
+		}
+		if text = strings.TrimSpace(text); text == "" {
+			continue
+		}
+		visuals = append(visuals, FrameText{Time: f.Time, Text: text})
+	}
+
+	// 6. 按时间轴融合成多模态上下文。
+	vctx := BuildVideoContext(task.ID, duration, transcripts, visuals, ContextWindow)
+
+	// 7. 落库。task_id 上有唯一索引，重试会覆盖上一次的结果。
 	rec := &models.VideoTranscription{
 		TaskID:    task.ID,
 		Content:   content,
@@ -96,8 +123,9 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		return fmt.Errorf("保存转录稿: %w", err)
 	}
 
-	log.Printf("任务处理完成 task=%d 时长=%.1fs 分段=%d 字数=%d 总耗时=%s",
-		task.ID, duration, len(segments), rec.WordCount, time.Since(start).Round(time.Millisecond))
+	log.Printf("任务处理完成 task=%d 时长=%.1fs 转写段=%d 关键帧=%d 上下文段=%d 字数=%d 总耗时=%s",
+		task.ID, duration, len(transcripts), len(frames), len(vctx.Segments), rec.WordCount,
+		time.Since(start).Round(time.Millisecond))
 
 	return nil
 }
