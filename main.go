@@ -46,6 +46,11 @@ func main() {
 		log.Fatal("初始化对象存储失败: ", err)
 	}
 
+	if err := services.InitMQ(config.MQURL()); err != nil {
+		log.Fatal("初始化消息队列失败: ", err)
+	}
+	defer services.CloseMQ()
+
 	r := gin.Default()
 
 	// 单次请求体上限。分片是 multipart 上传，内存阈值设成单片上限的两倍，

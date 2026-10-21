@@ -55,6 +55,11 @@ func S3UseSSL() bool {
 	return Getenv("VIDEOSCOPE_S3_USE_SSL", "false") == "true"
 }
 
+// MQURL 返回 RabbitMQ 连接串。
+func MQURL() string {
+	return Getenv("VIDEOSCOPE_MQ_URL", "amqp://guest:guest@127.0.0.1:5672/")
+}
+
 // ListenAddr 返回服务监听地址。
 func ListenAddr() string {
 	return Getenv("VIDEOSCOPE_LISTEN", ":8080")
