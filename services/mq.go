@@ -57,6 +57,15 @@ func InitMQ(url string) error {
 		return err
 	}
 
+	// 确认模式只开启一次，之后所有发送共用这条信道。
+	// 之前是每次发送都调 Confirm + NotifyPublish，重复注册会不断堆积监听者，
+	// 连发几次之后信道状态错乱，表现为发送阻塞直到超时。
+	if err := ch.Confirm(false); err != nil {
+		ch.Close()
+		conn.Close()
+		return fmt.Errorf("开启发布确认: %w", err)
+	}
+
 	mqConn = conn
 	mqChannel = ch
 	return nil
@@ -106,19 +115,18 @@ func PublishAnalyzeRetry(ctx context.Context, msg AnalyzeMessage, retry int) err
 // 用同步确认模式发送：只有 broker 确认接收后才返回成功。
 // 异步发送省那几毫秒，但消息发丢时前端已经拿到「已提交」的响应，
 // 用户会一直等一个永远不会开始的任务。
+//
+// 每个请求拿一个独立的 DeferredConfirmation 等待自己的回执。
+// 早期版本是全局注册一个 NotifyPublish 通道再从中读取，
+// 那种写法在并发下会把 A 的确认读给 B，而且每次发送都重新注册监听者，
+// 连发几次之后信道直接卡死。
 func publishAnalyze(ctx context.Context, msg AnalyzeMessage, headers amqp.Table) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("序列化消息: %w", err)
 	}
 
-	// 开启确认模式，配合下面的 NotifyPublish 等待 broker 回执。
-	if err := mqChannel.Confirm(false); err != nil {
-		return fmt.Errorf("开启发布确认: %w", err)
-	}
-	confirms := mqChannel.NotifyPublish(make(chan amqp.Confirmation, 1))
-
-	err = mqChannel.PublishWithContext(ctx,
+	dc, err := mqChannel.PublishWithDeferredConfirmWithContext(ctx,
 		"",
 		AnalyzeQueue,
 		false, // mandatory：没有匹配队列时退回而不是静默丢弃
@@ -136,18 +144,14 @@ func publishAnalyze(ctx context.Context, msg AnalyzeMessage, headers amqp.Table)
 		return fmt.Errorf("投递消息: %w", err)
 	}
 
-	select {
-	case c, ok := <-confirms:
-		if !ok {
-			return fmt.Errorf("确认通道已关闭")
-		}
-		if !c.Ack {
-			return fmt.Errorf("broker 拒绝接收消息")
-		}
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("等待确认超时: %w", ctx.Err())
+	acked, err := dc.WaitContext(ctx)
+	if err != nil {
+		return fmt.Errorf("等待确认: %w", err)
 	}
+	if !acked {
+		return fmt.Errorf("broker 拒绝接收消息")
+	}
+	return nil
 }
 
 // CloseMQ 关闭连接，进程退出前调用。

@@ -15,8 +15,11 @@ import (
 // 判断散落在各处时，新增一个状态很容易漏掉某条路径，
 // 最终表现为任务能跳过中间态直接完成。
 var allowedTransitions = map[int8][]int8{
-	models.TaskPending:    {models.TaskQueued},
-	models.TaskQueued:     {models.TaskProcessing, models.TaskFailed},
+	models.TaskPending: {models.TaskQueued},
+	// Queued 可以退回 Pending：投递消息失败时任务并没有真正进入队列，
+	// 留在排队状态会让用户重试时被告知「已在处理中」，任务永久卡死。
+	// 这条回退路径是投递失败的唯一出口。
+	models.TaskQueued:     {models.TaskProcessing, models.TaskFailed, models.TaskPending},
 	models.TaskProcessing: {models.TaskDone, models.TaskFailed},
 	models.TaskDone:       {},
 	// 失败后允许重新入队，这是重试的唯一入口。
