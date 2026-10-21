@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,7 +118,34 @@ func SplitAudio(ctx context.Context, src, outDir string, seconds int) ([]string,
 
 	// Glob 不保证顺序，显式排一次。
 	sort.Strings(matches)
-	return matches, nil
+
+	// 过滤掉过短的分段。
+	//
+	// 编码器的帧对齐会让音轨总时长比整数秒略长——实测 600 秒的音轨切出 600.006 秒，
+	// 按 300 秒切分就会多出一个只有几毫秒的尾段。
+	// 这种段送去识别没有意义，还白占一次接口配额和一次计费。
+	//
+	// 阈值取 16000 字节，约等于 0.5 秒的 16kHz/16bit 单声道 PCM
+	// （WAV 头 96 字节 + 0.5 × 16000 × 2 = 32 字节）。
+	const minSegmentBytes = 16000
+	valid := make([]string, 0, len(matches))
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil {
+			return nil, fmt.Errorf("检查分段文件: %w", err)
+		}
+		if info.Size() < minSegmentBytes {
+			log.Printf("丢弃过短分段 %s（%d 字节）", filepath.Base(m), info.Size())
+			os.Remove(m)
+			continue
+		}
+		valid = append(valid, m)
+	}
+
+	if len(valid) == 0 {
+		return nil, fmt.Errorf("切分后没有有效分段")
+	}
+	return valid, nil
 }
 
 // acquireFFmpeg 获取一个转码槽位，拿不到时等待或随 ctx 取消。
