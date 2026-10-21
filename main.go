@@ -80,6 +80,7 @@ func main() {
 		auth.POST("/upload/chunk", handlers.UploadChunk)
 		auth.GET("/upload/status", handlers.UploadStatus)
 		auth.POST("/upload/merge", handlers.MergeChunks)
+		auth.POST("/analyze", handlers.SubmitAnalyze)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
