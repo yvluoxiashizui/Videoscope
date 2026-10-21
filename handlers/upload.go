@@ -172,9 +172,10 @@ func UploadStatus(c *gin.Context) {
 // 防止前端因超时重试而重复调用。
 func MergeChunks(c *gin.Context) {
 	var req struct {
-		MD5   string `json:"md5" binding:"required"`
-		Total int    `json:"total" binding:"required"`
-		Ext   string `json:"ext"`
+		MD5      string `json:"md5" binding:"required"`
+		Total    int    `json:"total" binding:"required"`
+		Ext      string `json:"ext"`
+		Filename string `json:"filename"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "参数错误")
@@ -260,7 +261,17 @@ func MergeChunks(c *gin.Context) {
 		log.Printf("清除分片状态失败 md5=%s: %v", fileMD5, err)
 	}
 
-	ok(c, gin.H{"md5": fileMD5, "object": destKey})
+	// 落业务记录。任务从这里开始存在，后续的分析提交、状态查询都依赖它。
+	// 并发合并已被锁挡住，但前端重试仍可能走到这里，所以先查一次；
+	// 即便查漏了，MD5 上的唯一索引也会挡住重复插入。
+	task, err := services.EnsureTask(CurrentUserID(c), fileMD5, destKey, req.Filename)
+	if err != nil {
+		log.Printf("创建任务记录失败 md5=%s: %v", fileMD5, err)
+		fail(c, http.StatusInternalServerError, "创建任务记录失败")
+		return
+	}
+
+	ok(c, gin.H{"md5": fileMD5, "object": destKey, "task_id": task.ID})
 }
 
 // normalizeExt 规范化扩展名，只保留白名单内的值。

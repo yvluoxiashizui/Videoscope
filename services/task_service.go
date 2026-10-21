@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -51,6 +52,39 @@ func CreateTask(userID uint, md5, objectKey, filename string, size int64) (*mode
 		Status:    models.TaskPending,
 	}
 	if err := repos.CreateTask(t); err != nil {
+		return nil, fmt.Errorf("创建任务: %w", err)
+	}
+	return t, nil
+}
+
+// EnsureTask 保证一个视频有且只有一条任务记录，返回已有记录或新建的记录。
+//
+// 上传完成后调用。前端在合并超时后可能重试，同一个 MD5 会再次走到这里，
+// 所以先查一次；查到就直接返回旧记录，不覆盖它已有的状态——
+// 覆盖会把一个正在分析的任务打回待分析。
+//
+// 查询与插入之间仍有并发窗口，但 MD5 上的唯一索引会挡住重复插入，
+// 插入失败时回查一次即可，这比加锁简单得多。
+func EnsureTask(userID uint, md5, objectKey, filename string) (*models.VideoTask, error) {
+	if existing, err := repos.FindTaskByMD5(md5); err == nil {
+		return existing, nil
+	}
+
+	// 文件大小不影响业务逻辑，查不到就记 0，不为此中断上传流程。
+	size, _ := ObjectSize(context.Background(), objectKey)
+
+	t := &models.VideoTask{
+		UserID:    userID,
+		VideoMD5:  md5,
+		ObjectKey: objectKey,
+		Filename:  filename,
+		Size:      size,
+		Status:    models.TaskPending,
+	}
+	if err := repos.CreateTask(t); err != nil {
+		if existing, findErr := repos.FindTaskByMD5(md5); findErr == nil {
+			return existing, nil
+		}
 		return nil, fmt.Errorf("创建任务: %w", err)
 	}
 	return t, nil
