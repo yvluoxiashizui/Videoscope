@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/lifecycle"
 )
 
 // 对象存储客户端。
@@ -100,6 +102,58 @@ func ComposeChunks(ctx context.Context, md5 string, total int, destKey string) e
 	}, srcs...)
 	if err != nil {
 		return fmt.Errorf("合并分片: %w", err)
+	}
+	return nil
+}
+
+// PresignedGetURL 生成一个带签名的临时下载地址。
+//
+// 桶是私有的，直接用对象路径访问会被拒绝；只有拿到签名地址才能下载。
+// 签名里带过期时间，过期后链接自动失效，即使被转发出去也只在一段时间内可用。
+// 这样文件不直接暴露在公网，访问控制仍然收敛在后端的鉴权逻辑里。
+func PresignedGetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
+	u, err := storageClient.PresignedGetObject(ctx, storageBucket, key, expiry, nil)
+	if err != nil {
+		return "", fmt.Errorf("生成预签名地址: %w", err)
+	}
+	return u.String(), nil
+}
+
+// 存储生命周期规则。
+//
+// 分片是中间产物，合并成功后就没有价值，留一天足够了；
+// 清理动作交给存储层自己执行，不写定时任务——定时任务要额外维护、
+// 要处理删除失败的重试，而生命周期规则在存储内部运行，
+// 即使应用停止也照常生效。
+const (
+	ChunkPrefix      = "chunks/"
+	ChunkExpireDays  = 1
+	ObjectPrefix     = "videos/"
+	ObjectExpireDays = 7
+)
+
+// EnsureLifecycle 配置桶的生命周期规则，可重复调用。
+//
+// 原始视频只作为中间素材，处理完之后长期留存没有意义；
+// 但业务上还要允许用户回看和追问，所以保留一周而不是立刻删除。
+func EnsureLifecycle(ctx context.Context) error {
+	cfg := lifecycle.NewConfiguration()
+	cfg.Rules = append(cfg.Rules,
+		lifecycle.Rule{
+			ID:         "expire-chunks",
+			Status:     "Enabled",
+			RuleFilter: lifecycle.Filter{Prefix: ChunkPrefix},
+			Expiration: lifecycle.Expiration{Days: lifecycle.ExpirationDays(ChunkExpireDays)},
+		},
+		lifecycle.Rule{
+			ID:         "expire-objects",
+			Status:     "Enabled",
+			RuleFilter: lifecycle.Filter{Prefix: ObjectPrefix},
+			Expiration: lifecycle.Expiration{Days: lifecycle.ExpirationDays(ObjectExpireDays)},
+		},
+	)
+	if err := storageClient.SetBucketLifecycle(ctx, storageBucket, cfg); err != nil {
+		return fmt.Errorf("配置生命周期规则: %w", err)
 	}
 	return nil
 }

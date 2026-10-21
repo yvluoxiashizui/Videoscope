@@ -53,6 +53,12 @@ func main() {
 	}
 	defer services.CloseMQ()
 
+	// 分片与成品的过期清理交给存储层执行。
+	// 配置失败不阻止启动：清理规则是长期维护动作，没有它系统照样能用。
+	if err := services.EnsureLifecycle(context.Background()); err != nil {
+		log.Printf("配置对象存储生命周期失败: %v", err)
+	}
+
 	// 启动消费者。
 	// 阶段五先接一个占位处理逻辑，用于验证取任务、加锁、状态流转这条骨架；
 	// 阶段六替换成真实的转写与模型调用。
@@ -96,6 +102,7 @@ func main() {
 		auth.GET("/upload/status", handlers.UploadStatus)
 		auth.POST("/upload/merge", handlers.MergeChunks)
 		auth.POST("/analyze", handlers.SubmitAnalyze)
+		auth.GET("/task/:id/download", handlers.TaskDownloadURL)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
