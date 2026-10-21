@@ -127,5 +127,14 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		task.ID, duration, len(transcripts), len(frames), len(vctx.Segments), rec.WordCount,
 		time.Since(start).Round(time.Millisecond))
 
+	// 打印前几个窗口的实际内容，用于确认语音与画面的归属是否正确。
+	// 数字对得上不代表内容对得上，这里把融合结果摊开看一眼。
+	for i, s := range vctx.Segments {
+		if i >= 3 {
+			break
+		}
+		log.Printf("  窗口%d [%.0f-%.0fs] 语音=%q 画面=%q", i, s.Start, s.End, s.Speech, s.Visual)
+	}
+
 	return nil
 }
