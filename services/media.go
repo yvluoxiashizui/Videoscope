@@ -158,6 +158,65 @@ func acquireFFmpeg(ctx context.Context) (func(), error) {
 	}
 }
 
+// Keyframe 是一张抽取出来的画面帧，Time 是它在视频中的时间点（秒）。
+type Keyframe struct {
+	Path string
+	Time float64
+}
+
+// ExtractKeyframes 按固定间隔抽帧。
+//
+// 用固定间隔而不是场景切换检测：课程、讲座这类内容画面变化很少，
+// 场景检测几乎抽不出帧，而画面上的 PPT 和字幕是随时间持续更新的，
+// 固定间隔反而更稳。
+//
+// 时间戳按帧序号乘间隔推算。ffmpeg 的 fps 滤镜保证输出帧率均匀，
+// 所以第 n 张图对应的就是第 n 个间隔点，不需要额外读取元数据。
+func ExtractKeyframes(ctx context.Context, videoPath, outDir string, intervalSeconds int) ([]Keyframe, error) {
+	if intervalSeconds <= 0 {
+		return nil, fmt.Errorf("抽帧间隔必须大于零")
+	}
+
+	release, err := acquireFFmpeg(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	pattern := filepath.Join(outDir, "frame_%04d.jpg")
+
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-y",
+		"-i", videoPath,
+		// fps=1/N 表示每 N 秒取一帧。
+		"-vf", fmt.Sprintf("fps=1/%d", intervalSeconds),
+		// 质量 3 足够 OCR 认清文字，再高只是白白增大体积。
+		"-q:v", "3",
+		pattern,
+	)
+
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("抽取关键帧: %w (ffmpeg: %s)", err, tail(stderr.String(), 400))
+	}
+
+	matches, err := filepath.Glob(filepath.Join(outDir, "frame_*.jpg"))
+	if err != nil {
+		return nil, fmt.Errorf("查找关键帧: %w", err)
+	}
+	sort.Strings(matches)
+
+	frames := make([]Keyframe, 0, len(matches))
+	for i, path := range matches {
+		frames = append(frames, Keyframe{
+			Path: path,
+			Time: float64(i * intervalSeconds),
+		})
+	}
+	return frames, nil
+}
+
 // WorkDir 为某个任务创建临时工作目录。
 // 调用方负责在用完后删除整个目录。
 func WorkDir(taskID uint) (string, error) {
