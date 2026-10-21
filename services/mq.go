@@ -89,11 +89,24 @@ func declareTopology(ch *amqp.Channel) error {
 }
 
 // PublishAnalyze 投递一条分析任务。
+func PublishAnalyze(ctx context.Context, msg AnalyzeMessage) error {
+	return publishAnalyze(ctx, msg, nil)
+}
+
+// PublishAnalyzeRetry 重新投递一条失败的任务，带上新的重试次数。
+//
+// 重投的是一条新消息，原消息的 headers 不会自动继承，
+// 所以重试次数必须显式写入，否则计数永远停在一，退避会退化成无限循环。
+func PublishAnalyzeRetry(ctx context.Context, msg AnalyzeMessage, retry int) error {
+	return publishAnalyze(ctx, msg, amqp.Table{"retry_count": int32(retry)})
+}
+
+// publishAnalyze 是投递的共用实现。
 //
 // 用同步确认模式发送：只有 broker 确认接收后才返回成功。
 // 异步发送省那几毫秒，但消息发丢时前端已经拿到「已提交」的响应，
 // 用户会一直等一个永远不会开始的任务。
-func PublishAnalyze(ctx context.Context, msg AnalyzeMessage) error {
+func publishAnalyze(ctx context.Context, msg AnalyzeMessage, headers amqp.Table) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("序列化消息: %w", err)
@@ -115,6 +128,7 @@ func PublishAnalyze(ctx context.Context, msg AnalyzeMessage) error {
 			DeliveryMode: amqp.Persistent, // 持久化，broker 重启后消息还在
 			MessageId:    fmt.Sprintf("analyze-%d", msg.TaskID),
 			Timestamp:    time.Now(),
+			Headers:      headers,
 			Body:         body,
 		},
 	)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -75,6 +76,17 @@ func (c *Consumer) run(ctx context.Context, deliveries <-chan amqp.Delivery) {
 	}
 }
 
+// 失败重试策略。
+//
+// 重试次数上限与退避梯度：1 秒、2 秒、4 秒。
+// 用指数退避而不是固定间隔，是因为第三方接口抖动时，
+// 立刻重试大概率还在同一个故障窗口里，白费一次调用；
+// 而固定间隔的集体重试会形成同步脉冲，下游一恢复就被打满。
+const (
+	maxRetries    = 3
+	baseRetryWait = time.Second
+)
+
 // handle 处理单条消息。
 func (c *Consumer) handle(ctx context.Context, d amqp.Delivery) {
 	var msg AnalyzeMessage
@@ -86,13 +98,57 @@ func (c *Consumer) handle(ctx context.Context, d amqp.Delivery) {
 	}
 
 	if err := c.process(ctx, msg); err != nil {
-		log.Printf("任务处理失败 task=%d: %v", msg.TaskID, err)
-		// 重试策略在后续提交中补充，这里先直接进死信。
-		d.Nack(false, false)
+		retry := retryCount(d)
+
+		if retry >= maxRetries {
+			log.Printf("任务重试次数耗尽，转入死信 task=%d retry=%d err=%v", msg.TaskID, retry, err)
+			d.Nack(false, false)
+			return
+		}
+
+		// 退避后重新投递。
+		//
+		// 这里选择「延迟 + 重投新消息」而不是 Nack(requeue=true)：
+		// requeue 会把消息立刻放回队列头，下一次投递几乎没有间隔，
+		// 对幂等的瞬时故障没有意义，还会在日志里刷出一堆失败。
+		wait := baseRetryWait << retry
+		select {
+		case <-ctx.Done():
+			d.Nack(false, false)
+			return
+		case <-time.After(wait):
+		}
+
+		if pubErr := PublishAnalyzeRetry(ctx, msg, retry+1); pubErr != nil {
+			// 重投失败说明 broker 侧有问题，此时把原消息拒绝掉进死信，
+			// 至少留下一条可追溯的记录，而不是静默丢失。
+			log.Printf("重投失败，转入死信 task=%d: %v", msg.TaskID, pubErr)
+			d.Nack(false, false)
+			return
+		}
+
+		d.Ack(false)
 		return
 	}
 
 	d.Ack(false)
+}
+
+// retryCount 从消息头读重试次数。
+func retryCount(d amqp.Delivery) int {
+	if d.Headers == nil {
+		return 0
+	}
+	switch v := d.Headers["retry_count"].(type) {
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case int:
+		return v
+	default:
+		return 0
+	}
 }
 
 // process 执行一条任务的完整处理流程。
