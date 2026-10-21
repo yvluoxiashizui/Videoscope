@@ -168,6 +168,12 @@ func (mockTranscriber) Transcribe(ctx context.Context, audioPath string, offset 
 		if end > duration {
 			end = duration
 		}
+		// 跳过极短的尾条。
+		// 音频时长带小数（30 秒的段实际是 30.001 秒），循环会多跑一次，
+		// 产出一个毫秒级的条目。这种条目送进模型只是噪声。
+		if end-start < 0.5 {
+			continue
+		}
 		segs = append(segs, TranscriptSegment{
 			Start: start + offset,
 			End:   end + offset,
