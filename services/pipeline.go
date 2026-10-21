@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -113,7 +114,7 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 	// 6. 按时间轴融合成多模态上下文。
 	vctx := BuildVideoContext(task.ID, duration, transcripts, visuals, ContextWindow)
 
-	// 7. 落库。task_id 上有唯一索引，重试会覆盖上一次的结果。
+	// 7. 转录稿落库。task_id 上有唯一索引，重试会覆盖上一次的结果。
 	rec := &models.VideoTranscription{
 		TaskID:    task.ID,
 		Content:   content,
@@ -123,9 +124,33 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		return fmt.Errorf("保存转录稿: %w", err)
 	}
 
-	log.Printf("任务处理完成 task=%d 时长=%.1fs 转写段=%d 关键帧=%d 上下文段=%d 字数=%d 总耗时=%s",
+	// 8. 调用模型生成结构化分析。
+	//
+	// 转录稿先落库再调模型：模型调用是最贵、最容易失败的一步，
+	// 即使这里挂了，前面几十分钟的转写成果也保住了，
+	// 重试时可以直接从分析开始，不必重跑整条链路。
+	result, err := Analyze(ctx, vctx)
+	if err != nil {
+		return fmt.Errorf("生成分析结果: %w", err)
+	}
+
+	structured, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("序列化分析结果: %w", err)
+	}
+
+	summary := &models.AISummary{
+		TaskID:     task.ID,
+		Structured: string(structured),
+		ModelName:  LLMModelName(),
+	}
+	if err := repos.SaveSummary(summary); err != nil {
+		return fmt.Errorf("保存分析结果: %w", err)
+	}
+
+	log.Printf("任务处理完成 task=%d 时长=%.1fs 转写段=%d 关键帧=%d 上下文段=%d 字数=%d 章节=%d 模型=%s 总耗时=%s",
 		task.ID, duration, len(transcripts), len(frames), len(vctx.Segments), rec.WordCount,
-		time.Since(start).Round(time.Millisecond))
+		len(result.Chapters), LLMModelName(), time.Since(start).Round(time.Millisecond))
 
 	// 打印前几个窗口的实际内容，用于确认语音与画面的归属是否正确。
 	// 数字对得上不代表内容对得上，这里把融合结果摊开看一眼。

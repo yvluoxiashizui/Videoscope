@@ -3,9 +3,10 @@ package services
 // 全局依赖注入。
 // 用接口类型持有，调用方不关心背后是真实服务还是本地模拟实现。
 var (
-	transcriber Transcriber
-	ocr         OCRExtractor
-	llm         LLMClient
+	transcriber  Transcriber
+	ocr          OCRExtractor
+	llm          LLMClient
+	llmModelName string
 )
 
 // SetTranscriber 注入转写器。
@@ -30,12 +31,21 @@ func OCR() OCRExtractor {
 	return ocr
 }
 
-// SetLLMClient 注入大模型客户端。
-func SetLLMClient(c LLMClient) {
+// SetLLMClient 注入大模型客户端，同时记录模型标识。
+//
+// 模型名单独存一份是为了让分析结果能追溯到具体的模型与配置：
+// 同一条链路换过模型之后，历史结果的差异需要能归因。
+func SetLLMClient(c LLMClient, modelName string) {
 	llm = c
+	llmModelName = modelName
 }
 
 // LLM 返回当前的大模型客户端。
 func LLM() LLMClient {
 	return llm
+}
+
+// LLMModelName 返回当前使用的模型标识。
+func LLMModelName() string {
+	return llmModelName
 }

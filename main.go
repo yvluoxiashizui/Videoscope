@@ -67,8 +67,12 @@ func main() {
 	services.SetOCRExtractor(services.NewOCRExtractor())
 
 	// 大模型客户端：配了地址和密钥就走真实服务，否则退化为模拟实现。
+	llmModel := config.LLMModel()
+	if config.LLMBaseURL() == "" || config.LLMAPIKey() == "" {
+		llmModel = "mock"
+	}
 	services.SetLLMClient(services.NewLLMClient(
-		config.LLMBaseURL(), config.LLMAPIKey(), config.LLMModel()))
+		config.LLMBaseURL(), config.LLMAPIKey(), config.LLMModel()), llmModel)
 
 	// 启动消费者。处理逻辑是完整的视频处理流水线。
 	if err := services.StartConsumer(context.Background(), services.ProcessVideo); err != nil {
