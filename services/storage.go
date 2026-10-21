@@ -106,8 +106,19 @@ func ComposeChunks(ctx context.Context, md5 string, total int, destKey string) e
 	return nil
 }
 
-// PresignedGetURL 生成一个带签名的临时下载地址。
+// DownloadObject 把对象下载到本地文件。
 //
+// 处理链路需要把视频交给 ffmpeg，而 ffmpeg 只能操作本地文件，
+// 所以这一步是必须的中间环节。大文件建议配合磁盘配额管理，
+// 当前实现直接把对象铺到临时目录，处理完由调用方清理。
+func DownloadObject(ctx context.Context, key, localPath string) error {
+	if err := storageClient.FGetObject(ctx, storageBucket, key, localPath, minio.GetObjectOptions{}); err != nil {
+		return fmt.Errorf("下载对象 %s: %w", key, err)
+	}
+	return nil
+}
+
+// PresignedGetURL 生成一个带签名的临时下载地址。//
 // 桶是私有的，直接用对象路径访问会被拒绝；只有拿到签名地址才能下载。
 // 签名里带过期时间，过期后链接自动失效，即使被转发出去也只在一段时间内可用。
 // 这样文件不直接暴露在公网，访问控制仍然收敛在后端的鉴权逻辑里。
