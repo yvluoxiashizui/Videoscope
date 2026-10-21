@@ -59,6 +59,11 @@ func main() {
 		log.Printf("配置对象存储生命周期失败: %v", err)
 	}
 
+	// 转写器：配了地址和密钥就走真实服务，否则退化为模拟实现。
+	// 这样没有外部账号也能把整条处理链路跑通。
+	services.SetTranscriber(services.NewTranscriber(
+		config.ASRBaseURL(), config.ASRAPIKey(), config.ASRModel()))
+
 	// 启动消费者。
 	// 阶段五先接一个占位处理逻辑，用于验证取任务、加锁、状态流转这条骨架；
 	// 阶段六替换成真实的转写与模型调用。

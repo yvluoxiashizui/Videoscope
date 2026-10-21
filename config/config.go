@@ -60,6 +60,20 @@ func MQURL() string {
 	return Getenv("VIDEOSCOPE_MQ_URL", "amqp://guest:guest@127.0.0.1:5672/")
 }
 
+// ASR 相关配置。
+// 未配置地址或密钥时，转写会退化为模拟实现，用于本地跑通链路。
+func ASRBaseURL() string {
+	return Getenv("VIDEOSCOPE_ASR_BASE_URL", "")
+}
+
+func ASRAPIKey() string {
+	return Getenv("VIDEOSCOPE_ASR_API_KEY", "")
+}
+
+func ASRModel() string {
+	return Getenv("VIDEOSCOPE_ASR_MODEL", "whisper-1")
+}
+
 // ListenAddr 返回服务监听地址。
 func ListenAddr() string {
 	return Getenv("VIDEOSCOPE_LISTEN", ":8080")
