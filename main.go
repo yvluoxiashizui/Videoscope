@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -50,6 +52,19 @@ func main() {
 		log.Fatal("初始化消息队列失败: ", err)
 	}
 	defer services.CloseMQ()
+
+	// 启动消费者。
+	// 阶段五先接一个占位处理逻辑，用于验证取任务、加锁、状态流转这条骨架；
+	// 阶段六替换成真实的转写与模型调用。
+	if err := services.StartConsumer(context.Background(),
+		func(ctx context.Context, task *models.VideoTask) error {
+			log.Printf("开始处理任务 task=%d md5=%s", task.ID, task.VideoMD5)
+			time.Sleep(2 * time.Second)
+			log.Printf("处理完成 task=%d", task.ID)
+			return nil
+		}); err != nil {
+		log.Fatal("启动消费者失败: ", err)
+	}
 
 	r := gin.Default()
 
