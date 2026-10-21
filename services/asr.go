@@ -13,12 +13,24 @@ import (
 	"time"
 )
 
-// Transcriber 把一段音频转成文字。
+// TranscriptSegment 是一段带时间戳的转写结果。
 //
-// 抽成接口是为了让转写服务可替换：本地开发可以用模拟实现跑通链路，
-// 上线时换成真正的语音识别服务，上层编排逻辑不用改。
+// 时间戳是后面做多模态对齐的基础：只有知道「这句话出现在第几秒」，
+// 才能把它和同一时刻的画面文字对应起来。
+// 只返回一整段纯文本的话，语音和画面就只能是两条互不相干的线。
+type TranscriptSegment struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+// Transcriber 把一段音频转成带时间戳的文字。
+//
+// offset 是这段音频在完整音轨中的起始秒数。
+// 分段转写时每一段都从 0 开始计时，必须加上偏移量才能还原到全局时间轴，
+// 否则所有分段的文字都会挤在开头。
 type Transcriber interface {
-	Transcribe(ctx context.Context, audioPath string) (string, error)
+	Transcribe(ctx context.Context, audioPath string, offset float64) ([]TranscriptSegment, error)
 }
 
 // NewTranscriber 根据配置返回可用的实现。
@@ -37,7 +49,7 @@ func NewTranscriber(baseURL, apiKey, model string) Transcriber {
 
 // httpTranscriber 调用兼容 OpenAI 格式的语音转写接口。
 //
-// 选这个格式而不是绑死某家厂商的 SDK：只要接口协议一致，
+// 选这个格式而不是绑死某家厂商的 SDK：只要协议一致，
 // 换供应商时改的是 base URL 和模型名，不是代码。
 type httpTranscriber struct {
 	baseURL string
@@ -46,70 +58,121 @@ type httpTranscriber struct {
 	client  *http.Client
 }
 
-func (t *httpTranscriber) Transcribe(ctx context.Context, audioPath string) (string, error) {
+func (t *httpTranscriber) Transcribe(ctx context.Context, audioPath string, offset float64) ([]TranscriptSegment, error) {
 	f, err := os.Open(audioPath)
 	if err != nil {
-		return "", fmt.Errorf("打开音频文件: %w", err)
+		return nil, fmt.Errorf("打开音频文件: %w", err)
 	}
 	defer f.Close()
 
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	if err := w.WriteField("model", t.model); err != nil {
-		return "", fmt.Errorf("构造请求体: %w", err)
+		return nil, fmt.Errorf("构造请求体: %w", err)
+	}
+	// verbose_json 才会返回带时间戳的 segments。
+	// 默认的 json 格式只有一整段 text，拿不到时间信息。
+	if err := w.WriteField("response_format", "verbose_json"); err != nil {
+		return nil, fmt.Errorf("构造请求体: %w", err)
 	}
 	part, err := w.CreateFormFile("file", filepath.Base(audioPath))
 	if err != nil {
-		return "", fmt.Errorf("构造文件字段: %w", err)
+		return nil, fmt.Errorf("构造文件字段: %w", err)
 	}
 	if _, err := io.Copy(part, f); err != nil {
-		return "", fmt.Errorf("写入音频数据: %w", err)
+		return nil, fmt.Errorf("写入音频数据: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return "", fmt.Errorf("结束请求体: %w", err)
+		return nil, fmt.Errorf("结束请求体: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		t.baseURL+"/v1/audio/transcriptions", &body)
 	if err != nil {
-		return "", fmt.Errorf("构造请求: %w", err)
+		return nil, fmt.Errorf("构造请求: %w", err)
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("调用转写接口: %w", err)
+		return nil, fmt.Errorf("调用转写接口: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// 把响应体前一段带出来，定位问题时不用再复现一次。
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("转写接口返回 %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		return nil, fmt.Errorf("转写接口返回 %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
 	}
 
 	var out struct {
-		Text string `json:"text"`
+		Text     string `json:"text"`
+		Segments []struct {
+			Start float64 `json:"start"`
+			End   float64 `json:"end"`
+			Text  string  `json:"text"`
+		} `json:"segments"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("解析转写结果: %w", err)
+		return nil, fmt.Errorf("解析转写结果: %w", err)
 	}
-	return out.Text, nil
+
+	// 有些实现只返回整段 text 不返回 segments，退化成一个覆盖全段的条目，
+	// 保证调用方拿到的结构一致。
+	if len(out.Segments) == 0 {
+		if out.Text == "" {
+			return nil, nil
+		}
+		return []TranscriptSegment{{Start: offset, End: offset, Text: out.Text}}, nil
+	}
+
+	segs := make([]TranscriptSegment, 0, len(out.Segments))
+	for _, s := range out.Segments {
+		segs = append(segs, TranscriptSegment{
+			Start: s.Start + offset,
+			End:   s.End + offset,
+			Text:  s.Text,
+		})
+	}
+	return segs, nil
 }
 
 // mockTranscriber 是本地开发用的占位实现。
 //
-// 不做任何真实识别，只返回一段带前缀的说明文本。
-// 前缀是故意的：日志和数据库里一眼能看出这是模拟数据，
-// 不会和真实转写结果混淆。
+// 不做真实识别，但会按音频时长切出若干带时间戳的假条目，
+// 这样依赖时间戳的对齐逻辑在本地也能跑出真实形状。
 type mockTranscriber struct{}
 
-func (mockTranscriber) Transcribe(ctx context.Context, audioPath string) (string, error) {
+const (
+	// wavBytesPerSecond 是 16kHz / 16bit / 单声道 PCM 每秒的字节数。
+	wavBytesPerSecond = 16000 * 2
+	// mockSegmentSeconds 是假条目的粒度，与真实 ASR 常见的分句长度接近。
+	mockSegmentSeconds = 15.0
+)
+
+func (mockTranscriber) Transcribe(ctx context.Context, audioPath string, offset float64) ([]TranscriptSegment, error) {
 	info, err := os.Stat(audioPath)
 	if err != nil {
-		return "", fmt.Errorf("读取音频文件: %w", err)
+		return nil, fmt.Errorf("读取音频文件: %w", err)
 	}
-	return fmt.Sprintf("[模拟转写] %s，音频大小 %d 字节",
-		filepath.Base(audioPath), info.Size()), nil
+
+	// 扣除 44 字节 WAV 头，剩下按每秒字节数换算时长。
+	duration := float64(info.Size()-44) / wavBytesPerSecond
+	if duration <= 0 {
+		return nil, nil
+	}
+
+	segs := make([]TranscriptSegment, 0, int(duration/mockSegmentSeconds)+1)
+	for start := 0.0; start < duration; start += mockSegmentSeconds {
+		end := start + mockSegmentSeconds
+		if end > duration {
+			end = duration
+		}
+		segs = append(segs, TranscriptSegment{
+			Start: start + offset,
+			End:   end + offset,
+			Text:  fmt.Sprintf("[模拟转写 %.0f-%.0f秒]", start+offset, end+offset),
+		})
+	}
+	return segs, nil
 }

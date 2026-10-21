@@ -61,14 +61,24 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 	//
 	// 不用并发：转写接口通常有速率限制，并发反而容易触发限流；
 	// 而且分段数量不多（两小时视频约 24 段），串行的墙钟时间可以接受。
-	texts := make([]string, 0, len(segments))
+	//
+	// 偏移量按分段序号推算：除最后一段外，每段的实际长度都等于 SegmentSeconds，
+	// 所以第 i 段的起点就是 i * SegmentSeconds。
+	// 过短的尾段已经在切分阶段被过滤，不会打乱这个规律。
+	texts := make([]string, 0)
 	for i, seg := range segments {
-		text, err := ASR().Transcribe(ctx, seg)
+		offset := float64(i) * SegmentSeconds
+
+		segs, err := ASR().Transcribe(ctx, seg, offset)
 		if err != nil {
 			// 带上段序号，重试时能看出是哪一段的问题。
 			return fmt.Errorf("转写第 %d/%d 段: %w", i+1, len(segments), err)
 		}
-		texts = append(texts, strings.TrimSpace(text))
+		for _, s := range segs {
+			if text := strings.TrimSpace(s.Text); text != "" {
+				texts = append(texts, text)
+			}
+		}
 	}
 
 	content := strings.Join(texts, "\n")
