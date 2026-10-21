@@ -70,11 +70,6 @@ func (t *httpTranscriber) Transcribe(ctx context.Context, audioPath string, offs
 	if err := w.WriteField("model", t.model); err != nil {
 		return nil, fmt.Errorf("构造请求体: %w", err)
 	}
-	// verbose_json 才会返回带时间戳的 segments。
-	// 默认的 json 格式只有一整段 text，拿不到时间信息。
-	if err := w.WriteField("response_format", "verbose_json"); err != nil {
-		return nil, fmt.Errorf("构造请求体: %w", err)
-	}
 	part, err := w.CreateFormFile("file", filepath.Base(audioPath))
 	if err != nil {
 		return nil, fmt.Errorf("构造文件字段: %w", err)
@@ -117,8 +112,9 @@ func (t *httpTranscriber) Transcribe(ctx context.Context, audioPath string, offs
 		return nil, fmt.Errorf("解析转写结果: %w", err)
 	}
 
-	// 有些实现只返回整段 text 不返回 segments，退化成一个覆盖全段的条目，
-	// 保证调用方拿到的结构一致。
+	// 有些实现会返回 segments，有些只返回整段 text。
+	// 不额外请求 verbose_json 是因为部分平台不接受这个参数，直接报 400；
+	// 而且当前方案用分段边界做时间轴，本就不依赖返回值里的时间戳。
 	if len(out.Segments) == 0 {
 		if out.Text == "" {
 			return nil, nil
