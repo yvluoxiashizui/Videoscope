@@ -5,6 +5,7 @@ package services
 var (
 	transcriber Transcriber
 	ocr         OCRExtractor
+	llm         LLMClient
 )
 
 // SetTranscriber 注入转写器。
@@ -27,4 +28,14 @@ func SetOCRExtractor(o OCRExtractor) {
 // OCR 返回当前的画面文字识别器。
 func OCR() OCRExtractor {
 	return ocr
+}
+
+// SetLLMClient 注入大模型客户端。
+func SetLLMClient(c LLMClient) {
+	llm = c
+}
+
+// LLM 返回当前的大模型客户端。
+func LLM() LLMClient {
+	return llm
 }

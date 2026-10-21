@@ -74,6 +74,20 @@ func ASRModel() string {
 	return Getenv("VIDEOSCOPE_ASR_MODEL", "whisper-1")
 }
 
+// 大模型相关配置。
+// 未配置地址或密钥时，分析会退化为模拟实现。
+func LLMBaseURL() string {
+	return Getenv("VIDEOSCOPE_LLM_BASE_URL", "")
+}
+
+func LLMAPIKey() string {
+	return Getenv("VIDEOSCOPE_LLM_API_KEY", "")
+}
+
+func LLMModel() string {
+	return Getenv("VIDEOSCOPE_LLM_MODEL", "gpt-4o-mini")
+}
+
 // ListenAddr 返回服务监听地址。
 func ListenAddr() string {
 	return Getenv("VIDEOSCOPE_LISTEN", ":8080")

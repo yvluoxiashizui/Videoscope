@@ -66,6 +66,10 @@ func main() {
 	// 画面文字识别：本机装了 tesseract 就用它，没有则退化为模拟实现。
 	services.SetOCRExtractor(services.NewOCRExtractor())
 
+	// 大模型客户端：配了地址和密钥就走真实服务，否则退化为模拟实现。
+	services.SetLLMClient(services.NewLLMClient(
+		config.LLMBaseURL(), config.LLMAPIKey(), config.LLMModel()))
+
 	// 启动消费者。处理逻辑是完整的视频处理流水线。
 	if err := services.StartConsumer(context.Background(), services.ProcessVideo); err != nil {
 		log.Fatal("启动消费者失败: ", err)
