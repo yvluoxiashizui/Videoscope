@@ -201,6 +201,12 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 func finishAnalysis(ctx context.Context, task *models.VideoTask, vctx *VideoContext, start time.Time,
 	transcriptCount, frameCount, wordCount int) error {
 
+	// 从快照恢复时拿不到原始的转录稿字数，用上下文里的语音文本重新统计，
+	// 避免日志里出现「字数=0」这种误导性的值。
+	if wordCount == 0 {
+		wordCount = len([]rune(vctx.SpeechText()))
+	}
+
 	result, err := Analyze(ctx, vctx)
 	if err != nil {
 		return fmt.Errorf("生成分析结果: %w", err)
