@@ -29,6 +29,7 @@ func main() {
 		&models.VideoTask{},
 		&models.VideoTranscription{},
 		&models.AISummary{},
+		&models.VideoChunk{},
 	); err != nil {
 		log.Fatal("建表失败: ", err)
 	}
