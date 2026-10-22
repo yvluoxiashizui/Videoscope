@@ -115,6 +115,7 @@ func main() {
 		auth.POST("/analyze", handlers.SubmitAnalyze)
 		auth.GET("/task/:id/download", handlers.TaskDownloadURL)
 		auth.GET("/task/:id/events", handlers.TaskEvents)
+		auth.POST("/task/:id/ask", handlers.AskVideo)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
