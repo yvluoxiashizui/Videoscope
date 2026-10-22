@@ -74,6 +74,10 @@ func main() {
 	services.SetLLMClient(services.NewLLMClient(
 		config.LLMBaseURL(), config.LLMAPIKey(), config.LLMModel()), llmModel)
 
+	// 向量化服务：复用对话服务的地址与密钥，只换模型。
+	services.SetEmbedder(services.NewEmbedder(
+		config.LLMBaseURL(), config.LLMAPIKey(), config.EmbedModel()))
+
 	// 启动消费者。处理逻辑是完整的视频处理流水线。
 	if err := services.StartConsumer(context.Background(), services.ProcessVideo); err != nil {
 		log.Fatal("启动消费者失败: ", err)

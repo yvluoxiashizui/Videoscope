@@ -88,6 +88,12 @@ func LLMModel() string {
 	return Getenv("VIDEOSCOPE_LLM_MODEL", "gpt-4o-mini")
 }
 
+// 向量化模型配置。
+// 与对话共用同一个服务地址和密钥，只换模型名。
+func EmbedModel() string {
+	return Getenv("VIDEOSCOPE_EMBED_MODEL", "BAAI/bge-m3")
+}
+
 // ListenAddr 返回服务监听地址。
 func ListenAddr() string {
 	return Getenv("VIDEOSCOPE_LISTEN", ":8080")

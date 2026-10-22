@@ -7,6 +7,7 @@ var (
 	ocr          OCRExtractor
 	llm          LLMClient
 	llmModelName string
+	embedder     Embedder
 )
 
 // SetTranscriber 注入转写器。
@@ -48,4 +49,14 @@ func LLM() LLMClient {
 // LLMModelName 返回当前使用的模型标识。
 func LLMModelName() string {
 	return llmModelName
+}
+
+// SetEmbedder 注入向量化服务。
+func SetEmbedder(e Embedder) {
+	embedder = e
+}
+
+// Embed 返回当前的向量化服务。
+func Embed() Embedder {
+	return embedder
 }
