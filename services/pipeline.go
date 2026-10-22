@@ -148,9 +148,19 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		return fmt.Errorf("保存分析结果: %w", err)
 	}
 
-	log.Printf("任务处理完成 task=%d 时长=%.1fs 转写段=%d 关键帧=%d 上下文段=%d 字数=%d 章节=%d 模型=%s 总耗时=%s",
+	// 9. 建立检索索引。
+	//
+	// 失败不阻断主流程：分析结果已经落库，用户可以正常看总结，
+	// 只是追问功能暂时不可用。把它当成任务失败会让前面的成果白费，
+	// 而索引随时可以重建。
+	chunkCount, idxErr := IndexTask(ctx, task.ID, vctx)
+	if idxErr != nil {
+		log.Printf("建立检索索引失败 task=%d: %v", task.ID, idxErr)
+	}
+
+	log.Printf("任务处理完成 task=%d 时长=%.1fs 转写段=%d 关键帧=%d 上下文段=%d 字数=%d 章节=%d 索引块=%d 模型=%s 总耗时=%s",
 		task.ID, duration, len(transcripts), len(frames), len(vctx.Segments), rec.WordCount,
-		len(result.Chapters), LLMModelName(), time.Since(start).Round(time.Millisecond))
+		len(result.Chapters), chunkCount, LLMModelName(), time.Since(start).Round(time.Millisecond))
 
 	// 打印前几个窗口的实际内容，用于确认语音与画面的归属是否正确。
 	// 数字对得上不代表内容对得上，这里把融合结果摊开看一眼。
