@@ -3,11 +3,12 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strconv"
 
 	"github.com/redis/go-redis/v9"
+
+	"videoscope/models"
 )
 
 // 任务事件通道前缀。
@@ -70,27 +71,7 @@ func PublishTransition(taskID uint, to int8, errMsg string) {
 	PublishTaskEvent(context.Background(), TaskEvent{
 		TaskID: taskID,
 		Status: to,
-		Text:   statusText(to),
+		Text:   models.StatusText(to),
 		ErrMsg: errMsg,
 	})
-}
-
-// statusText 把状态码转成可直接展示的中文。
-// 与 models.StatusText 的差别在于这里不依赖 models 包，
-// 避免 services 内部的基础设施和领域模型耦合过深。
-func statusText(status int8) string {
-	switch status {
-	case 0:
-		return "待分析"
-	case 1:
-		return "排队中"
-	case 2:
-		return "处理中"
-	case 3:
-		return "已完成"
-	case 4:
-		return "处理失败"
-	default:
-		return fmt.Sprintf("未知状态(%d)", status)
-	}
 }

@@ -19,7 +19,9 @@ const (
 func StatusText(s int8) string {
 	switch s {
 	case TaskPending:
-		return "待上传"
+		// 取名为「待分析」而不是「待上传」：记录创建时文件已经合并完成，
+		// 这个状态表示任务就绪、但用户还没提交分析。
+		return "待分析"
 	case TaskQueued:
 		return "排队中"
 	case TaskProcessing:
@@ -27,7 +29,7 @@ func StatusText(s int8) string {
 	case TaskDone:
 		return "已完成"
 	case TaskFailed:
-		return "失败"
+		return "处理失败"
 	default:
 		return "未知"
 	}
