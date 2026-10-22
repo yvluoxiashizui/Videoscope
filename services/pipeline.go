@@ -28,9 +28,21 @@ const asrConcurrency = 5
 // ProcessVideo 是一个任务的完整处理链路：下载 → 抽音轨 → 分段 → 转写 → 落库。
 //
 // 每一步都会在失败时立刻返回，由上层消费者决定重试还是转死信。
-// 中间产物全部放在任务独立的临时目录里，函数返回时整个目录删除——
-// 失败也不留垃圾，因为重试会重新走一遍。
+// 中间产物全部放在任务独立的临时目录里，函数返回时整个目录删除。
+//
+// 重试前会先查一次上下文快照：如果上一次已经跑完了转写和画面识别、
+// 只是后面的模型调用或建索引失败，那次快照还在，
+// 直接从快照恢复即可，不必把最耗时的那几段重新算一遍。
 func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
+	start := time.Now()
+
+	// 0. 先看有没有可恢复的断点。
+	if vctx := LoadCheckpoint(ctx, task.ID); vctx != nil {
+		log.Printf("跳过重复处理 task=%d 从上下文快照继续", task.ID)
+		// 恢复路径拿不到原始的分段数与帧数，用快照里的规模代替展示。
+		return finishAnalysis(ctx, task, vctx, start, 0, 0, 0)
+	}
+
 	dir, err := WorkDir(task.ID)
 	if err != nil {
 		return err
@@ -40,8 +52,6 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 			log.Printf("清理临时目录失败 task=%d dir=%s: %v", task.ID, dir, err)
 		}
 	}()
-
-	start := time.Now()
 
 	// 1. 把对象存储里的视频拉到本地。ffmpeg 只能读本地文件。
 	videoPath := filepath.Join(dir, "source"+filepath.Ext(task.ObjectKey))
@@ -159,21 +169,38 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 	// 6. 按时间轴融合成多模态上下文。
 	vctx := BuildVideoContext(task.ID, duration, transcripts, visuals, ContextWindow)
 
-	// 7. 转录稿落库。task_id 上有唯一索引，重试会覆盖上一次的结果。
+	// 7. 转录稿与上下文快照一起落库。
+	//
+	// 快照在这里写，是因为前面的下载、抽音轨、转写、画面识别
+	// 是整条链路里最耗时的部分。后续模型调用或索引失败、消息被重投时，
+	// 从快照恢复就能跳过这几步，不必重新算一遍。
+	snapshot, snapErr := PrepareCheckpoint(vctx)
+	if snapErr != nil {
+		log.Printf("生成上下文快照失败 task=%d: %v", task.ID, snapErr)
+	}
+
 	rec := &models.VideoTranscription{
-		TaskID:    task.ID,
-		Content:   content,
-		WordCount: len([]rune(content)),
+		TaskID:      task.ID,
+		Content:     content,
+		WordCount:   len([]rune(content)),
+		ContextJSON: snapshot,
 	}
 	if err := repos.SaveTranscription(rec); err != nil {
 		return fmt.Errorf("保存转录稿: %w", err)
 	}
 
-	// 8. 调用模型生成结构化分析。
-	//
-	// 转录稿先落库再调模型：模型调用是最贵、最容易失败的一步，
-	// 即使这里挂了，前面几十分钟的转写成果也保住了，
-	// 重试时可以直接从分析开始，不必重跑整条链路。
+	// 8. 后续分析与建索引。
+	return finishAnalysis(ctx, task, vctx, start,
+		len(transcripts), len(frames), rec.WordCount)
+}
+
+// finishAnalysis 是断点恢复与完整处理共用的后半段。
+//
+// 从快照恢复的任务跳过前面所有步骤，直接进这里；
+// 完整处理的任务走完全程后也落到这里，两条路径只有一份实现。
+func finishAnalysis(ctx context.Context, task *models.VideoTask, vctx *VideoContext, start time.Time,
+	transcriptCount, frameCount, wordCount int) error {
+
 	result, err := Analyze(ctx, vctx)
 	if err != nil {
 		return fmt.Errorf("生成分析结果: %w", err)
@@ -193,7 +220,7 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		return fmt.Errorf("保存分析结果: %w", err)
 	}
 
-	// 9. 建立检索索引。
+	// 建立检索索引。
 	//
 	// 失败不阻断主流程：分析结果已经落库，用户可以正常看总结，
 	// 只是追问功能暂时不可用。把它当成任务失败会让前面的成果白费，
@@ -204,17 +231,8 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 	}
 
 	log.Printf("任务处理完成 task=%d 时长=%.1fs 转写段=%d 关键帧=%d 上下文段=%d 字数=%d 章节=%d 索引块=%d 模型=%s 总耗时=%s",
-		task.ID, duration, len(transcripts), len(frames), len(vctx.Segments), rec.WordCount,
+		task.ID, vctx.Duration, transcriptCount, frameCount, len(vctx.Segments), wordCount,
 		len(result.Chapters), chunkCount, LLMModelName(), time.Since(start).Round(time.Millisecond))
-
-	// 打印前几个窗口的实际内容，用于确认语音与画面的归属是否正确。
-	// 数字对得上不代表内容对得上，这里把融合结果摊开看一眼。
-	for i, s := range vctx.Segments {
-		if i >= 3 {
-			break
-		}
-		log.Printf("  窗口%d [%.0f-%.0fs] 语音=%q 画面=%q", i, s.Start, s.End, s.Speech, s.Visual)
-	}
 
 	return nil
 }
