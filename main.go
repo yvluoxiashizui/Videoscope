@@ -110,6 +110,7 @@ func main() {
 		auth.POST("/upload/merge", handlers.MergeChunks)
 		auth.POST("/analyze", handlers.SubmitAnalyze)
 		auth.GET("/task/:id/download", handlers.TaskDownloadURL)
+		auth.GET("/task/:id/events", handlers.TaskEvents)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
