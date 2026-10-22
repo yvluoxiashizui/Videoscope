@@ -8,11 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"videoscope/models"
 	"videoscope/repos"
 )
+
+// asrConcurrency 是转写时同时进行的请求数。
+//
+// 上限受两方面约束：太低起不到缩短墙钟时间的作用，
+// 太高会撞上识别服务的速率限制，请求被批量拒绝反而更慢。
+// 三路是实测下来在「明显变快」和「不触发限流」之间的取值。
+const asrConcurrency = 3
 
 // ProcessVideo 是一个任务的完整处理链路：下载 → 抽音轨 → 分段 → 转写 → 落库。
 //
@@ -58,24 +66,59 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 		return err
 	}
 
-	// 4. 逐段转写。
+	// 4. 分段转写。
 	//
-	// 不用并发：转写接口通常有速率限制，并发反而容易触发限流；
-	// 而且分段数量不多（两小时视频约 24 段），串行的墙钟时间可以接受。
+	// 并发跑，用固定大小的 worker 池限制同时进行的请求数。
 	//
-	// 偏移量按分段序号推算：除最后一段外，每段的实际长度都等于 SegmentSeconds，
-	// 所以第 i 段的起点就是 i * SegmentSeconds。
-	// 过短的尾段已经在切分阶段被过滤，不会打乱这个规律。
+	// 早期是串行：一段转完再转下一段。小视频看不出问题，
+	// 但五分钟的音频切出十段，每段一次网络往返，串行下来
+	// 光转写就要四五分钟。分段之间彼此独立，没有先后依赖，
+	// 串行等于把可以重叠的等待时间全部排成了队列。
+	//
+	// 但也不能无限并发：转写接口有速率限制，全部同时发出去
+	// 会触发限流，反而把请求都打回来。三到四路是实测下来
+	// 既能压掉大部分墙钟时间、又不会撞限流的区间。
 	transcripts := make([]TranscriptSegment, 0)
 	texts := make([]string, 0)
-	for i, seg := range segments {
-		offset := float64(i) * SegmentSeconds
 
-		segs, err := ASR().Transcribe(ctx, seg, offset)
+	results := make([][]TranscriptSegment, len(segments))
+	errs := make([]error, len(segments))
+
+	sem := make(chan struct{}, asrConcurrency)
+	var wg sync.WaitGroup
+
+	for i := range segments {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+
+			// 偏移量按分段序号推算：除最后一段外每段长度都等于 SegmentSeconds，
+			// 所以第 i 段的起点就是 i * SegmentSeconds。
+			// 过短的尾段已在切分阶段被过滤，不会打乱这个规律。
+			offset := float64(i) * SegmentSeconds
+			results[i], errs[i] = ASR().Transcribe(ctx, segments[i], offset)
+		}(i)
+	}
+	wg.Wait()
+
+	// 并发执行后按序号检查错误，报错时能明确指出是哪一段出了问题。
+	for i, err := range errs {
 		if err != nil {
-			// 带上段序号，重试时能看出是哪一段的问题。
 			return fmt.Errorf("转写第 %d/%d 段: %w", i+1, len(segments), err)
 		}
+	}
+
+	// 按分段顺序拼接结果。并发完成顺序是乱的，
+	// 但内容必须按时间先后排列，所以这里按索引取而不是按完成顺序。
+	for _, segs := range results {
 		for _, s := range segs {
 			if text := strings.TrimSpace(s.Text); text != "" {
 				transcripts = append(transcripts, s)
