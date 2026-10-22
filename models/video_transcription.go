@@ -21,6 +21,16 @@ type VideoTranscription struct {
 	// 字数用于前端展示与后续按长度分段处理。
 	WordCount int `gorm:"not null;default:0" json:"word_count"`
 
+	// ContextJSON 保存融合后的多模态上下文，作为失败重试的断点。
+	//
+	// 转写和画面识别是整条链路里最耗时的两步，结果都合并在上下文里。
+	// 后续的模型调用或索引建立失败时，从这里恢复就能跳过前面几步，
+	// 不必重新下载视频、重新抽音轨、重新识别一遍。
+	//
+	// 存 JSON 而不是拆成多张表：这个字段只用于恢复，不参与查询，
+	// 拆表带不来任何查询上的收益，只增加维护成本。
+	ContextJSON string `gorm:"type:mediumtext" json:"-"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
