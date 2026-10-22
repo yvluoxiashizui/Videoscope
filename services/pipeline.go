@@ -146,11 +146,14 @@ func ProcessVideo(ctx context.Context, task *models.VideoTask) error {
 
 	// 5. 抽关键帧并识别画面文字。
 	//
-	// 单帧识别失败不中断整个任务：黑屏、纯色画面本来就抽不出文字，
-	// 这不是异常。只有所有帧都失败才值得警惕，用日志暴露出来。
-	frames, err := ExtractKeyframes(ctx, videoPath, dir, KeyframeInterval)
-	if err != nil {
-		return fmt.Errorf("抽取关键帧: %w", err)
+	// 抽帧失败不中断整个任务：语音转写已经有结果，
+	// 少了画面信息只是让上下文缺一个维度，比整条链路作废好。
+	// 有些视频本身就没有可用的视频流，或者编码格式特殊抽不出帧，
+	// 这类情况不该让用户拿不到任何结果。
+	frames, frameErr := ExtractKeyframes(ctx, videoPath, dir, KeyframeInterval)
+	if frameErr != nil {
+		log.Printf("抽取关键帧失败，跳过画面识别 task=%d: %v", task.ID, frameErr)
+		frames = nil
 	}
 
 	visuals := make([]FrameText, 0, len(frames))

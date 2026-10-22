@@ -193,6 +193,12 @@ func ExtractKeyframes(ctx context.Context, videoPath, outDir string, intervalSec
 		"-i", videoPath,
 		// fps=1/N 表示每 N 秒取一帧。
 		"-vf", fmt.Sprintf("fps=1/%d", intervalSeconds),
+		// 强制转成 JPEG 支持的像素格式。
+		//
+		// 手机拍摄的视频常见 10bit 或 HDR 编码（yuv420p10le、p010le 等），
+		// mjpeg 编码器不接受这些格式，不显式转换会直接报
+		// Invalid argument 并且一帧都写不出来。
+		"-pix_fmt", "yuvj420p",
 		// 质量 3 足够 OCR 认清文字，再高只是白白增大体积。
 		"-q:v", "3",
 		pattern,
