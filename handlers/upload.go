@@ -205,7 +205,15 @@ func MergeChunks(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "查询合并结果失败")
 		return
 	} else if exists {
-		ok(c, gin.H{"md5": fileMD5, "object": destKey, "reused": true})
+		// 命中已有成品时也要把任务标识返回给前端。
+		// 少了这个字段，前端拿不到任务 ID，后续订阅进度和追问都无从发起。
+		// EnsureTask 本身是幂等的：任务存在就返回已有的，不存在才新建。
+		task, err := services.EnsureTask(CurrentUserID(c), fileMD5, destKey, req.Filename)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, "创建任务记录失败")
+			return
+		}
+		ok(c, gin.H{"md5": fileMD5, "object": destKey, "reused": true, "task_id": task.ID})
 		return
 	}
 
