@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"videoscope/models"
+	"videoscope/repos"
 )
 
 // 问答提示词。
@@ -119,4 +120,22 @@ func EnsureAnswerable(task *models.VideoTask) error {
 		return fmt.Errorf("任务尚未处理完成，当前状态：%s", models.StatusText(task.Status))
 	}
 	return nil
+}
+
+// LoadAnalysis 读取某个任务已生成的结构化分析结果。
+//
+// 结果在库里以 JSON 字符串存储，这里反序列化回结构体给前端用。
+// 单独提供一个读接口而不是在任务详情里返回整段：
+// 分析结果可能包含大量章节内容，任务列表这类场景不需要它。
+func LoadAnalysis(taskID uint) (*AnalysisResult, error) {
+	rec, err := repos.FindSummary(taskID)
+	if err != nil {
+		return nil, fmt.Errorf("查询分析结果: %w", err)
+	}
+
+	var result AnalysisResult
+	if err := json.Unmarshal([]byte(rec.Structured), &result); err != nil {
+		return nil, fmt.Errorf("解析分析结果: %w", err)
+	}
+	return &result, nil
 }

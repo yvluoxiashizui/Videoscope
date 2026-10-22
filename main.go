@@ -94,6 +94,11 @@ func main() {
 	r.POST("/api/register", handlers.Register)
 	r.POST("/api/login", handlers.Login)
 	r.GET("/api/user", handlers.GetUser)
+
+	// 前端页面。单文件原生 JS，不引框架也不走构建流程——
+	// 这个项目的前端只负责调接口和展示结果，引入框架是过度设计。
+	r.StaticFile("/", "./web/index.html")
+
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -117,6 +122,7 @@ func main() {
 		auth.GET("/task/:id/download", handlers.TaskDownloadURL)
 		auth.GET("/task/:id/events", handlers.TaskEvents)
 		auth.POST("/task/:id/ask", handlers.AskVideo)
+		auth.GET("/task/:id/summary", handlers.TaskSummary)
 	}
 
 	if err := r.Run(config.ListenAddr()); err != nil {
