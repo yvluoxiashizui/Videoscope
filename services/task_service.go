@@ -117,6 +117,12 @@ func Transition(taskID uint, from, to int8, errMsg string) error {
 	if !updated {
 		return ErrStatusConflict
 	}
+
+	// 状态落地之后再发通知。
+	// 顺序反了会出现「客户端看到完成、数据库里还是处理中」的时间窗，
+	// 用户刷新页面状态又退回去。
+	PublishTransition(taskID, to, errMsg)
+
 	return nil
 }
 
